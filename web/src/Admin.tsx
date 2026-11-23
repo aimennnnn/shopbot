@@ -103,8 +103,8 @@ export default function Admin() {
         {view === "overview" && (
           <>
             <div className="stats">
-              <Stat label="Revenue" value={rupees(stats.revenue)} note={`${stats.orders} orders, ${stats.cancelled} cancelled`} />
-              <Stat label="Customers" value={stats.users} note={`${stats.conversations} conversations`} />
+              <Stat label="Revenue" value={rupees(stats.revenue)} note={`${stats.orders} ${stats.orders === 1 ? "order" : "orders"}, ${stats.cancelled} cancelled`} />
+              <Stat label="Customers" value={stats.users} note={`${stats.conversations} ${stats.conversations === 1 ? "conversation" : "conversations"}`} />
               <Stat label="Messages answered" value={stats.chats} note={`${stats.with_tools} used a tool`} />
               <Stat label="Tokens used" value={(stats.tokens_in + stats.tokens_out).toLocaleString()}
                 note={`${stats.tokens_in.toLocaleString()} in, ${stats.tokens_out.toLocaleString()} out`} />

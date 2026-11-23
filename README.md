@@ -61,6 +61,10 @@ State is `messages`, `memory` (facts loaded for this turn) and `blocked`.
 | `my_orders` | Lists the user's own orders from all conversations. |
 | `remember` | Saves a lasting fact about the user. |
 
+### Tracing with LangSmith
+
+Every `/chat` call is traced in LangSmith (project `shopbot`): each node, each tool call, the model's input and output, tokens and timing. It is switched on with environment variables only (`LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`), so there is no tracing code in the repo and no key in it either.
+
 ## Memory design
 
 | | Short-term | Long-term |
@@ -166,7 +170,7 @@ Tables and demo products are created on first start.
 
 ### Deploy
 
-- **Agent API:** Render, new Web Service from this repo, root directory `api`, runtime Docker, free plan. Set `ANTHROPIC_API_KEY`, `DATABASE_URL`, `ADMIN_PASSWORD` and `MODEL` under Environment.
+- **Agent API:** Render, new Web Service from this repo, root directory `api`, runtime Docker, free plan. Set `ANTHROPIC_API_KEY`, `DATABASE_URL`, `ADMIN_PASSWORD`, `MODEL` and the three `LANGSMITH_` variables under Environment.
 - **Website:** Vercel, import this repo, root directory `web`, framework Vite.
 - **Database:** Neon free project. Use the direct connection string (pooling off).
 - Render's free plan sleeps after 15 minutes without traffic. `.github/workflows/keep-alive.yml` pings `/health` every 5 minutes to keep it awake.
