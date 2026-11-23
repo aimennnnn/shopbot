@@ -45,6 +45,12 @@ CREATE TABLE IF NOT EXISTS pending_actions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (user_id, thread_key)
 );
+-- Website customers prove who they are with a secret key. Only its hash is stored.
+CREATE TABLE IF NOT EXISTS user_keys (
+    user_id TEXT PRIMARY KEY,
+    key_hash TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 -- One row per /chat call, for the admin dashboard and cost tracking.
 CREATE TABLE IF NOT EXISTS chat_log (
     id SERIAL PRIMARY KEY,

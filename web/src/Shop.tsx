@@ -28,8 +28,8 @@ export default function Shop() {
   // Who is shopping, and which conversation is open. Both survive a page reload.
   const [userId, setUserId] = useState(() => {
     const saved = store.get("shopbot_user", "");
-    if (saved) return saved;
-    const fresh = randomId("guest");
+    if (saved.startsWith("web-")) return saved;
+    const fresh = randomId("web-guest");
     store.set("shopbot_user", fresh);
     return fresh;
   });
@@ -51,6 +51,7 @@ export default function Shop() {
   const [tab, setTab] = useState<Tab>("chat");
   const [chatOpen, setChatOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
+  const [switchError, setSwitchError] = useState("");
   const [draft, setDraft] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -116,17 +117,25 @@ export default function Shop() {
     setTab("chat");
   }
 
-  function switchUser(e: FormEvent<HTMLFormElement>) {
+  async function switchUser(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const name = String(new FormData(e.currentTarget).get("name") || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
     if (!name) return;
+    const id = "web-" + name;
+    try {
+      setOrders(await api.orders(id)); // fails if another device already owns this name
+    } catch {
+      setSwitchError("That name is already used on another device. Pick a different one.");
+      return;
+    }
     const fresh = randomId("chat");
-    store.set("shopbot_user", name);
+    store.set("shopbot_user", id);
     store.set("shopbot_thread", fresh);
-    setUserId(name);
+    setUserId(id);
     setThreadId(fresh);
     setMessages([]);
     setSwitching(false);
+    setSwitchError("");
   }
 
   async function forgetMe() {
@@ -217,11 +226,12 @@ export default function Shop() {
               <form onSubmit={switchUser} className="who-form">
                 <input name="name" placeholder="Customer name, e.g. sara" autoFocus maxLength={30} aria-label="Customer name" />
                 <button className="btn btn-primary" type="submit">Switch</button>
-                <button className="btn btn-quiet" type="button" onClick={() => setSwitching(false)}>Cancel</button>
+                <button className="btn btn-quiet" type="button" onClick={() => { setSwitching(false); setSwitchError(""); }}>Cancel</button>
+                {switchError && <p className="error who-error" role="alert">{switchError}</p>}
               </form>
             ) : (
               <>
-                <span>Shopping as <b>{userId}</b></span>
+                <span>Shopping as <b>{userId.replace(/^web-/, "")}</b></span>
                 <button className="link" onClick={() => setSwitching(true)}>Switch customer</button>
               </>
             )}

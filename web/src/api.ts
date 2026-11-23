@@ -23,9 +23,23 @@ export type Stats = {
   low_stock: { id: number; name: string; stock: number }[];
 };
 
+// This browser's secret key. The API ties each website customer id to the first
+// key that uses it, so knowing someone's id is not enough to read their data.
+function userKey(): string {
+  let key = store.get("shopbot_key", "");
+  if (key.length < 16) {
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    key = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    store.set("shopbot_key", key);
+  }
+  return key;
+}
+
 async function call<T>(path: string, init: RequestInit = {}, adminToken?: string): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (adminToken) headers["x-admin-token"] = adminToken;
+  else headers["x-user-key"] = userKey();
   const res = await fetch(API + path, { ...init, headers });
   if (!res.ok) {
     const detail = await res.json().then((j) => j.detail).catch(() => "");

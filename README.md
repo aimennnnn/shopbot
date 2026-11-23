@@ -84,6 +84,13 @@ State is `messages`, `memory` (facts loaded for this turn) and `blocked`.
 - **Off-topic:** the agent only helps with this shop and refuses everything else in one sentence.
 - **Risky actions:** spending money and cancelling orders need a human yes. `place_order` only prepares the order. `confirm_action` is refused in code unless the yes arrives in a later message than the one that prepared it. The model cannot skip this, even if told to.
 
+### Abuse protection
+
+- **Customer keys:** the website gives each browser a secret key. A website customer id (`web-...`) is tied to the first key that uses it, so knowing someone's id is not enough to read their orders or memory, or to chat as them. Only a hash of the key is stored. Ids without the `web-` prefix stay open, because the brief says `/chat` must work without login.
+- **Rate limit:** 60 messages a minute per sender on `/chat` (set with `RATE_LIMIT_PER_MIN`). This protects the API key's spend limit.
+- **Dashboard lockout:** five wrong admin passwords lock that sender out for 15 minutes.
+- **SQL:** every query uses parameters, never string building.
+
 ## Cost
 
 `claude-haiku-5-5` costs $0.10 per million input tokens and $0.50 per million output tokens. Cost is kept low by a short system prompt, short tool descriptions, a 300 token reply limit, trimmed history, and the guard node that answers attacks without the model. The dashboard shows tokens used per message.
@@ -180,6 +187,7 @@ api/         FastAPI + LangGraph agent (Dockerfile for Render)
   app/graph.py    the graph: guard, recall, agent, tools
   app/tools.py    the six tools and the memory store helpers
   app/safety.py   the guard patterns
+  app/security.py customer keys, rate limit, dashboard lockout
   app/db.py       Postgres schema, pool and demo catalog
   app/main.py     /chat, /health and the website endpoints
 web/         React + Vite + TypeScript: shop page and seller dashboard

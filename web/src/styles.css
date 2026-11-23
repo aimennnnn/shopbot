@@ -124,7 +124,8 @@ button, input, textarea { font: inherit; color: inherit; }
 .assistant-sub { font-size: 13px; opacity: 0.85; }
 .close-chat { display: none; color: #fff; background: transparent; }
 .who { display: flex; justify-content: space-between; gap: 8px; padding: 8px 16px; font-size: 14px; background: var(--tile); border-bottom: 1.5px solid var(--line); }
-.who-form { display: flex; gap: 6px; width: 100%; }
+.who-form { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
+.who-error { flex-basis: 100%; font-size: 13.5px; }
 .who-form input { flex: 1; min-width: 0; padding: 6px 8px; border: 1.5px solid var(--line); border-radius: 4px; }
 .who-form .btn { padding: 6px 10px; }
 .tabs { display: flex; border-bottom: 1.5px solid var(--line); }

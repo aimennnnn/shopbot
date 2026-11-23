@@ -3,17 +3,16 @@
 Graded endpoints:  POST /chat   GET /health
 Website endpoints: /products /orders /memory and /admin/* (password protected)
 """
-import hmac
 import logging
 import threading
 import uuid
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict
 
-from . import config, db
+from . import config, db, security
 from .graph import get_graph, get_llm, run_turn
 from .tools import forget_facts, load_facts
 
@@ -52,8 +51,12 @@ def health() -> str:
 
 
 @app.post("/chat")
-def chat(body: ChatIn) -> dict:
+def chat(body: ChatIn, request: Request, x_user_key: str = Header(default="")) -> dict:
+    if security.too_many_requests(request):
+        return {"reply": "You are sending messages too fast. Please wait a minute and try again.",
+                "tool_calls": [], "tokens": {"in": 0, "out": 0}, "error": "rate_limited"}
     user_id = body.user_id.strip()[:100] or "anonymous"
+    security.check_user(user_id, x_user_key)
     thread_id = body.thread_id.strip()[:100] or "default"
     message = body.message.strip()[: config.MAX_MESSAGE_CHARS]
     if not message:
@@ -92,28 +95,29 @@ def products() -> list[dict]:
 
 
 @app.get("/orders")
-def orders(user_id: str) -> list[dict]:
+def orders(user_id: str, x_user_key: str = Header(default="")) -> list[dict]:
+    security.check_user(user_id, x_user_key)
     db.init()
     return db.query("SELECT id, product_name, quantity, total, status, created_at FROM orders "
                     "WHERE user_id = %s ORDER BY id DESC LIMIT 50", (user_id,))
 
 
 @app.get("/memory")
-def memory(user_id: str) -> list[dict]:
+def memory(user_id: str, x_user_key: str = Header(default="")) -> list[dict]:
+    security.check_user(user_id, x_user_key)
     return load_facts(user_id, limit=50)
 
 
 @app.delete("/memory")
-def forget(user_id: str) -> dict:
+def forget(user_id: str, x_user_key: str = Header(default="")) -> dict:
+    security.check_user(user_id, x_user_key)
     return {"deleted": forget_facts(user_id)}
 
 
 # ---------- admin endpoints (seller dashboard) ----------
 
-def admin(x_admin_token: str = Header(default="")) -> None:
-    ok = config.ADMIN_PASSWORD and hmac.compare_digest(x_admin_token.encode(), config.ADMIN_PASSWORD.encode())
-    if not ok:
-        raise HTTPException(status_code=401, detail="Wrong admin password")
+def admin(request: Request, x_admin_token: str = Header(default="")) -> None:
+    security.check_admin(request, x_admin_token)
     db.init()
 
 
