@@ -173,7 +173,7 @@ Tables and demo products are created on first start.
 - **Agent API:** Render, new Web Service from this repo, root directory `api`, runtime Docker, free plan. Set `ANTHROPIC_API_KEY`, `DATABASE_URL`, `ADMIN_PASSWORD`, `MODEL` and the three `LANGSMITH_` variables under Environment.
 - **Website:** Vercel, import this repo, root directory `web`, framework Vite.
 - **Database:** Neon free project. Use the direct connection string (pooling off).
-- Render's free plan sleeps after 15 minutes without traffic. `.github/workflows/keep-alive.yml` pings `/health` every 5 minutes to keep it awake.
+- Render's free plan sleeps after 15 minutes without traffic. The API keeps itself awake: a background thread calls its own public `/health` every 8 minutes and touches the database every 4 (`keep_awake` in `api/app/main.py`). `.github/workflows/keep-alive.yml` is a second pinger.
 
 No API keys are in this repo. `.env` is git-ignored and `.env.example` holds placeholders only.
 

@@ -4,7 +4,10 @@ Graded endpoints:  POST /chat   GET /health
 Website endpoints: /products /orders /memory and /admin/* (password protected)
 """
 import logging
+import os
 import threading
+import time
+import urllib.request
 import uuid
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -34,6 +37,28 @@ def warm_up() -> None:
             log.warning("warm-up failed: %s", e)
 
     threading.Thread(target=run, daemon=True).start()
+    threading.Thread(target=keep_awake, daemon=True).start()
+
+
+def keep_awake() -> None:
+    """Render's free plan sleeps after 15 minutes without traffic, and Neon
+    pauses after 5. Every 4 minutes this touches the database, and every 8
+    minutes it calls the service's own public /health, so neither goes cold."""
+    url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+    turn = 0
+    while True:
+        time.sleep(240)
+        turn += 1
+        try:
+            db.query("SELECT 1")
+        except Exception as e:
+            log.warning("keep-awake database ping failed: %s", e)
+        if url and turn % 2 == 0:
+            try:
+                urllib.request.urlopen(url + "/health", timeout=30).read()
+                log.info("keep-awake ping ok")
+            except Exception as e:
+                log.warning("keep-awake ping failed: %s", e)
 
 
 # ---------- graded endpoints ----------
