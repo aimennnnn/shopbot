@@ -1,0 +1,71 @@
+// All calls to the agent API live here.
+export const API = (import.meta.env.VITE_API_URL || "https://shopbot-api-vnny.onrender.com").replace(/\/$/, "");
+
+export type Product = {
+  id: number; name: string; description: string; category: string;
+  price: number; stock: number; emoji: string; active?: boolean;
+};
+export type Order = {
+  id: number; user_id?: string; product_name: string; quantity: number;
+  total: number; status: string; created_at: string;
+};
+export type Fact = { id: string; fact: string };
+export type ToolCall = { name: string; args: Record<string, unknown> };
+export type ChatReply = { reply: string; tool_calls: ToolCall[]; tokens: { in: number; out: number } };
+export type ChatLog = {
+  id: number; user_id: string; thread_id: string; message: string; reply: string;
+  tool_calls: ToolCall[]; tokens_in: number; tokens_out: number; blocked: boolean; created_at: string;
+};
+export type Stats = {
+  chats: number; users: number; conversations: number; tokens_in: number; tokens_out: number;
+  blocked: number; with_tools: number; orders: number; revenue: number; cancelled: number;
+  daily: { day: string; chats: number; tokens: number }[];
+  low_stock: { id: number; name: string; stock: number }[];
+};
+
+async function call<T>(path: string, init: RequestInit = {}, adminToken?: string): Promise<T> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (adminToken) headers["x-admin-token"] = adminToken;
+  const res = await fetch(API + path, { ...init, headers });
+  if (!res.ok) {
+    const detail = await res.json().then((j) => j.detail).catch(() => "");
+    throw new Error(detail || `Request failed (${res.status})`);
+  }
+  return res.json();
+}
+
+const q = (userId: string) => `?user_id=${encodeURIComponent(userId)}`;
+
+export const api = {
+  products: () => call<Product[]>("/products"),
+  orders: (userId: string) => call<Order[]>("/orders" + q(userId)),
+  memory: (userId: string) => call<Fact[]>("/memory" + q(userId)),
+  forget: (userId: string) => call<{ deleted: number }>("/memory" + q(userId), { method: "DELETE" }),
+  chat: (user_id: string, thread_id: string, message: string) =>
+    call<ChatReply>("/chat", { method: "POST", body: JSON.stringify({ user_id, thread_id, message }) }),
+
+  adminStats: (t: string) => call<Stats>("/admin/stats", {}, t),
+  adminOrders: (t: string) => call<Order[]>("/admin/orders", {}, t),
+  adminChats: (t: string) => call<ChatLog[]>("/admin/chats", {}, t),
+  adminProducts: (t: string) => call<Product[]>("/admin/products", {}, t),
+  adminUploadCatalog: (t: string, products: Partial<Product>[]) =>
+    call<{ added: number; updated: number }>("/admin/catalog", { method: "POST", body: JSON.stringify({ products }) }, t),
+  adminSaveProduct: (t: string, p: Partial<Product>) =>
+    call<{ id: number }>(p.id ? `/admin/products/${p.id}` : "/admin/products",
+      { method: p.id ? "PUT" : "POST", body: JSON.stringify(p) }, t),
+};
+
+export const rupees = (n: number) => "Rs " + Number(n).toLocaleString("en-PK");
+
+// localStorage can be unavailable (private mode), so never let it throw.
+export const store = {
+  get(key: string, fallback: string): string {
+    try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; }
+  },
+  set(key: string, value: string) {
+    try { localStorage.setItem(key, value); } catch { /* ignore */ }
+  },
+};
+
+export const randomId = (prefix: string) =>
+  prefix + "-" + Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-3);

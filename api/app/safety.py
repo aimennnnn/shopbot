@@ -17,7 +17,7 @@ INJECTION_PATTERNS = [
     r"</?(system|instructions?)>",
     r"\[(system|inst)\]",
     r"(other|another|all|every) (users?|customers?|people)('s|s')? (orders?|data|details|address|info|chats?|messages?|history|memory)",
-    r"(orders?|data|details|address|chats?|messages?|history|memory) (of|for|from|belonging to) (user|customer|another|other)",
+    r"(orders?|data|details|address|chats?|messages?|history|memory) (of|for|from|belonging to) (the |a |any |an |some )?(user|customer|another|other)",
 ]
 _INJECTION = re.compile("|".join(f"(?:{p})" for p in INJECTION_PATTERNS), re.IGNORECASE)
 

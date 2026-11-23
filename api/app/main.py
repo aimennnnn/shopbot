@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict
 
 from . import config, db
 from .graph import get_graph, run_turn
+from .tools import forget_facts, load_facts
 
 log = logging.getLogger("shopbot")
 logging.basicConfig(level=logging.INFO)
@@ -98,14 +99,12 @@ def orders(user_id: str) -> list[dict]:
 
 @app.get("/memory")
 def memory(user_id: str) -> list[dict]:
-    db.init()
-    return db.query("SELECT id, fact FROM user_memory WHERE user_id = %s ORDER BY id", (user_id,))
+    return load_facts(user_id, limit=50)
 
 
 @app.delete("/memory")
 def forget(user_id: str) -> dict:
-    db.init()
-    return {"deleted": db.execute("DELETE FROM user_memory WHERE user_id = %s", (user_id,))}
+    return {"deleted": forget_facts(user_id)}
 
 
 # ---------- admin endpoints (seller dashboard) ----------
@@ -181,6 +180,31 @@ def admin_update_product(product_id: int, p: ProductIn) -> dict:
     if not n:
         raise HTTPException(status_code=404, detail="No such product")
     return {"id": product_id}
+
+
+class CatalogIn(BaseModel):
+    products: list[ProductIn]
+
+
+@app.post("/admin/catalog", dependencies=[Depends(admin)])
+def admin_upload_catalog(body: CatalogIn) -> dict:
+    """Bulk upload from the dashboard's CSV import. A product with the same
+    name is updated, anything new is added."""
+    added = updated = 0
+    for p in body.products[:500]:
+        n = db.execute(
+            "UPDATE products SET description = %s, category = %s, price = %s, stock = %s, emoji = %s, "
+            "active = %s WHERE lower(name) = lower(%s)",
+            (p.description, p.category, p.price, p.stock, p.emoji, p.active, p.name))
+        if n:
+            updated += 1
+        else:
+            db.execute(
+                "INSERT INTO products (name, description, category, price, stock, emoji, active) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (p.name, p.description, p.category, p.price, p.stock, p.emoji, p.active))
+            added += 1
+    return {"added": added, "updated": updated}
 
 
 def _json(value) -> str:

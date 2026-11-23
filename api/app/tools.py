@@ -2,6 +2,7 @@
 
 Security rule: user_id never comes from the model. It is taken from the
 request (via config), so one user can never reach another user's data."""
+import hashlib
 import json
 import re
 
@@ -149,20 +150,30 @@ def remember(fact: str, *, config: RunnableConfig) -> str:
 TOOLS = [search_products, place_order, cancel_order, confirm_action, my_orders, remember]
 
 
+def _namespace(user_id: str) -> tuple[str, str]:
+    """Each user gets a private namespace in the store. The id is hex-encoded
+    because store namespaces cannot contain some characters (like dots)."""
+    return ("memory", user_id.encode().hex())
+
+
 def save_fact(user_id: str, fact: str) -> None:
     fact = " ".join(fact.split())[:200]
     if fact:
-        db.execute(
-            "INSERT INTO user_memory (user_id, fact) VALUES (%s, %s) ON CONFLICT DO NOTHING",
-            (user_id, fact),
-        )
+        key = hashlib.sha1(fact.lower().encode()).hexdigest()[:16]  # same fact is stored once
+        db.store().put(_namespace(user_id), key, {"fact": fact})
 
 
-def load_facts(user_id: str, limit: int = 12) -> list[str]:
-    rows = db.query(
-        "SELECT fact FROM user_memory WHERE user_id = %s ORDER BY id DESC LIMIT %s", (user_id, limit)
-    )
-    return [r["fact"] for r in reversed(rows)]
+def load_facts(user_id: str, limit: int = 12) -> list[dict]:
+    items = db.store().search(_namespace(user_id), limit=50)
+    items.sort(key=lambda i: i.created_at)
+    return [{"id": i.key, "fact": i.value["fact"]} for i in items[-limit:]]
+
+
+def forget_facts(user_id: str) -> int:
+    items = db.store().search(_namespace(user_id), limit=200)
+    for i in items:
+        db.store().delete(_namespace(user_id), i.key)
+    return len(items)
 
 
 def _set_pending(user_id: str, thread_id: str, request_id: str, kind: str, payload: dict) -> None:

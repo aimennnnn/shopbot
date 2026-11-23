@@ -1,0 +1,164 @@
+# ShopBot
+
+An AI storefront for small sellers. The seller uploads a catalog and gets a shop page with a sales agent that answers questions, recommends and upsells products, and takes orders. The seller gets a dashboard for orders, sales, stock and conversations.
+
+Built for the Design to Production hackathon (AI-4016 Agentic AI, FAST School of Computing, Islamabad). Track 1: ShopBot.
+
+| | |
+|---|---|
+| Live website | https://shopbot-web.vercel.app |
+| Seller dashboard | https://shopbot-web.vercel.app/#/admin |
+| Agent API | https://shopbot-api-vnny.onrender.com |
+| Model | `claude-haiku-5-5` |
+
+The demo shop is **Dastkari**, a small Pakistani handicrafts seller (blue pottery, truck art, ajrak). Orders are not real.
+
+## Demo
+
+![ShopBot demo](docs/demo.gif)
+
+## Architecture
+
+```mermaid
+flowchart LR
+    C[Customer page<br/>React + Vite on Vercel] -->|POST /chat| API
+    S[Seller dashboard<br/>React + Vite on Vercel] -->|/admin/* with password| API
+
+    subgraph API[Agent API: FastAPI on Render, Docker]
+        direction LR
+        G[guard<br/>blocks injection<br/>0 tokens] -->|safe| R[recall<br/>loads user memory]
+        G -->|blocked| E((END))
+        R --> A[agent<br/>Claude Haiku 5.5]
+        A -->|tool call| T[tools]
+        T --> A
+        A -->|answer| E
+    end
+
+    T --> DB[(Neon Postgres)]
+    R --> DB
+    A -.checkpoint per thread.-> DB
+```
+
+The agent is a LangGraph `StateGraph` with four nodes that each do one job:
+
+| Node | Role | Calls the model? |
+|---|---|---|
+| `guard` | Safety check. Refuses obvious prompt injection and requests for other users' data. | No |
+| `recall` | Loads this user's long-term memory from the store. | No |
+| `agent` | The sales agent. Decides what to say or which tool to call. | Yes |
+| `tools` | Runs the tools against the database. | No |
+
+State is `messages`, `memory` (facts loaded for this turn) and `blocked`.
+
+### Tools (all real, all hit Postgres)
+
+| Tool | What it does |
+|---|---|
+| `search_products` | Searches the catalog by keyword and price limit. |
+| `place_order` | Prepares an order. Nothing is bought yet. |
+| `cancel_order` | Prepares cancelling one of the user's own orders. |
+| `confirm_action` | Carries out the prepared order or cancellation after the customer says yes. |
+| `my_orders` | Lists the user's own orders from all conversations. |
+| `remember` | Saves a lasting fact about the user. |
+
+## Memory design
+
+| | Short-term | Long-term |
+|---|---|---|
+| What | The messages of one conversation | Facts about a user (name, tastes, sizes) and their order history |
+| Keyed by | `thread_id` (together with `user_id`) | `user_id` |
+| Stored in | LangGraph `PostgresSaver` checkpointer, in Neon | LangGraph `PostgresStore` and the `orders` table, in Neon |
+| Lifetime | One conversation | All of the user's conversations |
+
+- **Short-term.** Every turn is checkpointed in Postgres, so a conversation survives a server restart. Long chats are trimmed: the model only sees the last 20 messages, which keeps cost flat.
+- **Long-term.** The agent decides what is worth saving and calls `remember` for lasting facts only, not small talk. The `recall` node loads those facts at the start of every turn, in any thread.
+- **Users are kept separate** in three ways:
+  1. `user_id` always comes from the request, never from the model. Tools cannot be talked into using someone else's id.
+  2. The checkpoint key is `[user_id, thread_id]`, so two users with the same `thread_id` still have separate conversations.
+  3. Every memory namespace and every SQL query is filtered by `user_id`.
+- Nothing is kept in process memory. A restart loses nothing.
+
+## Safety
+
+- **Prompt injection:** the `guard` node refuses known injection patterns before the model is called, so attacks cost 0 tokens. The system prompt covers subtler cases.
+- **Off-topic:** the agent only helps with this shop and refuses everything else in one sentence.
+- **Risky actions:** spending money and cancelling orders need a human yes. `place_order` only prepares the order. `confirm_action` is refused in code unless the yes arrives in a later message than the one that prepared it. The model cannot skip this, even if told to.
+
+## Cost
+
+`claude-haiku-5-5` costs $0.10 per million input tokens and $0.50 per million output tokens. Cost is kept low by a short system prompt, short tool descriptions, a 300 token reply limit, trimmed history, and the guard node that answers attacks without the model. The dashboard shows tokens used per message.
+
+## Benchmark
+
+15 tests in [`tests.json`](tests.json): 10 of our own plus 5 attack tests. Run them with `python benchmark/run.py`.
+
+<!-- BENCHMARK -->
+Results are added after the run against the live API.
+<!-- /BENCHMARK -->
+
+## API
+
+Open, no login.
+
+```
+POST /chat
+  body:    {"user_id": "u1", "thread_id": "t1", "message": "Do you have mugs?"}
+  returns: {"reply": "...", "tool_calls": [{"name": "search_products", "args": {...}}], "tokens": {"in": 0, "out": 0}}
+
+GET /health
+  returns: ok
+```
+
+## Setup
+
+You need Python 3.12, Node 20, a Neon database and a Claude API key.
+
+```bash
+git clone https://github.com/aimennnnn/shopbot.git
+cd shopbot
+cp .env.example api/.env        # then fill in the values
+
+# Agent API
+cd api
+pip install -r requirements.txt
+set -a; source .env; set +a      # PowerShell: set each variable with $env:NAME="value"
+uvicorn app.main:app --port 7860
+
+# Website (new terminal)
+cd web
+npm install
+echo "VITE_API_URL=http://localhost:7860" > .env.local
+npm run dev
+```
+
+Tables and demo products are created on first start.
+
+### Deploy
+
+- **Agent API:** Render, new Web Service from this repo, root directory `api`, runtime Docker, free plan. Set `ANTHROPIC_API_KEY`, `DATABASE_URL`, `ADMIN_PASSWORD` and `MODEL` under Environment.
+- **Website:** Vercel, import this repo, root directory `web`, framework Vite.
+- **Database:** Neon free project. Use the direct connection string (pooling off).
+- Render's free plan sleeps after 15 minutes without traffic. `.github/workflows/keep-alive.yml` pings `/health` every 5 minutes to keep it awake.
+
+No API keys are in this repo. `.env` is git-ignored and `.env.example` holds placeholders only.
+
+## Business case
+
+- **Customer:** small sellers who sell through Instagram and WhatsApp and answer the same questions by hand all day.
+- **Product:** upload a CSV catalog, get a shop page and a sales agent that works day and night, plus a dashboard.
+- **How it earns:** a monthly fee per seller.
+- **Why it can be cheap:** an average message costs a small fraction of a cent on Haiku 5.5 (see the benchmark), so one seller's monthly AI cost is far below the fee.
+
+## Repo layout
+
+```
+api/         FastAPI + LangGraph agent (Dockerfile for Render)
+  app/graph.py    the graph: guard, recall, agent, tools
+  app/tools.py    the six tools and the memory store helpers
+  app/safety.py   the guard patterns
+  app/db.py       Postgres schema, pool and demo catalog
+  app/main.py     /chat, /health and the website endpoints
+web/         React + Vite + TypeScript: shop page and seller dashboard
+benchmark/   runner for tests.json
+tests.json   15 test cases with expected behaviour
+```

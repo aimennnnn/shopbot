@@ -10,7 +10,8 @@ agent   the sales agent (Claude) deciding what to say or which tool to call
 tools   runs the tools against the database
 
 Short-term memory: LangGraph's Postgres checkpointer saves the message list
-per thread. Long-term memory: the user_memory and orders tables, keyed by user_id.
+per thread. Long-term memory: LangGraph's Postgres store (facts) and the orders
+table, both keyed by user_id.
 """
 import json
 import re
@@ -34,7 +35,8 @@ Rules:
 - Never invent products, prices or stock. Use search_products.
 - place_order and cancel_order only prepare the action. Then ask the customer to confirm. Call confirm_action only after they clearly say yes in a later message.
 - You only know this one customer. Never talk about other customers.
-- When the customer shares a lasting fact about themselves (name, size, taste, city), call remember.
+- When the customer shares a lasting fact about themselves (name, size, taste, city), call remember. Do not save small talk.
+- After the customer picks an item, suggest one matching item once. Never push.
 - Keep replies under 70 words, plain text.
 {memory}"""
 
@@ -61,7 +63,7 @@ def recall(state: State, config: RunnableConfig) -> dict:
     found = NAME_RE.search(str(state["messages"][-1].content))
     if found:  # cheap backup so a name is saved even if the model forgets to
         save_fact(user_id, f"Name: {found.group(1).capitalize()}")
-    return {"memory": load_facts(user_id)}
+    return {"memory": [f["fact"] for f in load_facts(user_id)]}
 
 
 def agent(state: State) -> dict:
@@ -108,7 +110,7 @@ def get_graph():
     if _graph is None:
         with _lock:
             if _graph is None:
-                db.init()
+                store = db.store()
                 saver = PostgresSaver(db.pool())
                 saver.setup()
                 g = StateGraph(State)
@@ -121,7 +123,7 @@ def get_graph():
                 g.add_edge("recall", "agent")
                 g.add_conditional_edges("agent", after_agent, ["tools", END])
                 g.add_edge("tools", "agent")
-                _graph = g.compile(checkpointer=saver)
+                _graph = g.compile(checkpointer=saver, store=store)
     return _graph
 
 

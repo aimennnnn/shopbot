@@ -1,14 +1,17 @@
 """Postgres (Neon) access. Everything that must survive a restart lives here."""
 import threading
 
+from langgraph.store.postgres import PostgresStore
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 from . import config
 
 _pool: ConnectionPool | None = None
+_store: PostgresStore | None = None
 _ready = False
 _lock = threading.Lock()
+_lock_init = threading.Lock()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS products (
@@ -42,15 +45,6 @@ CREATE TABLE IF NOT EXISTS pending_actions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (user_id, thread_key)
 );
--- Long-term memory: facts about one user, shared by all their conversations.
-CREATE TABLE IF NOT EXISTS user_memory (
-    id SERIAL PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    fact TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (user_id, fact)
-);
-CREATE INDEX IF NOT EXISTS user_memory_user_idx ON user_memory (user_id);
 -- One row per /chat call, for the admin dashboard and cost tracking.
 CREATE TABLE IF NOT EXISTS chat_log (
     id SERIAL PRIMARY KEY,
@@ -105,8 +99,9 @@ def pool() -> ConnectionPool:
 
 
 def init() -> None:
-    """Create tables and demo products once. Safe to call many times."""
-    global _ready
+    """Create tables, the long-term memory store and demo products once.
+    Safe to call many times."""
+    global _ready, _store
     if _ready:
         return
     with _lock_init:
@@ -121,10 +116,16 @@ def init() -> None:
                         "VALUES (%s, %s, %s, %s, %s, %s)",
                         SEED,
                     )
+        store = PostgresStore(pool())
+        store.setup()
+        _store = store
         _ready = True
 
 
-_lock_init = threading.Lock()
+def store() -> PostgresStore:
+    """LangGraph store that holds long-term memory, keyed by user_id."""
+    init()
+    return _store
 
 
 def query(sql: str, params: tuple = ()) -> list[dict]:
