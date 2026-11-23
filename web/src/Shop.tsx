@@ -193,7 +193,7 @@ export default function Shop() {
                     </span>
                   </div>
                   <div className="card-actions">
-                    <button className="btn" onClick={() => send(`Tell me about the ${p.name}`)}>Ask about it</button>
+                    <button className="btn" onClick={() => send(`Tell me about the ${p.name}`)}>Ask</button>
                     <button className="btn btn-primary" disabled={p.stock === 0}
                       onClick={() => send(`I want to order 1 ${p.name}`)}>Order</button>
                   </div>
@@ -252,7 +252,7 @@ export default function Shop() {
                     <p>{m.text}</p>
                     {m.tools && m.tools.length > 0 && (
                       <div className="tools">
-                        {m.tools.map((t, j) => <span key={j} className="tool">{TOOL_LABELS[t.name] ?? t.name}</span>)}
+                        {Array.from(new Set(m.tools.map((t) => TOOL_LABELS[t.name] ?? t.name))).map((label) => <span key={label} className="tool">{label}</span>)}
                       </div>
                     )}
                   </div>

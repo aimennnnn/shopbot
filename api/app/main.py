@@ -14,7 +14,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict
 
 from . import config, db
-from .graph import get_graph, run_turn
+from .graph import get_graph, get_llm, run_turn
 from .tools import forget_facts, load_facts
 
 log = logging.getLogger("shopbot")
@@ -30,6 +30,7 @@ def warm_up() -> None:
     def run() -> None:
         try:
             get_graph()
+            get_llm()  # loads the model client now, so the first chat is not slow
         except Exception as e:  # the app still starts; /chat will retry
             log.warning("warm-up failed: %s", e)
 

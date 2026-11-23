@@ -144,6 +144,11 @@ def remember(fact: str, *, config: RunnableConfig) -> str:
     """Save one short lasting fact about this customer (name, size, taste, city) for future chats."""
     user_id, _, _ = _ctx(config)
     save_fact(user_id, fact)
+    # The recall node may have saved a bare "Name: X" already. Keep only the fuller fact.
+    for item in db.store().search(_namespace(user_id), limit=50):
+        short = item.value["fact"]
+        if short.startswith("Name: ") and short != fact and short[6:].lower() in fact.lower():
+            db.store().delete(_namespace(user_id), item.key)
     return "Saved."
 
 
