@@ -200,6 +200,12 @@ td { padding: 10px 14px; border-top: 1px solid var(--line); }
 .log-tokens { margin-left: auto; }
 .who-tag { font-weight: 700; color: var(--cobalt); margin-right: 6px; }
 
+.live { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13.5px; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--turquoise); }
+.reset-box { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.btn-danger { background: var(--madder); border-color: var(--madder); color: #fff; }
+.btn-danger:hover { background: #8f1a22; }
+
 /* Phones: the assistant becomes a full-screen sheet opened by a button. */
 @media (max-width: 900px) {
   .layout { grid-template-columns: 1fr; }

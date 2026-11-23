@@ -62,6 +62,7 @@ export const api = {
   adminOrders: (t: string) => call<Order[]>("/admin/orders", {}, t),
   adminChats: (t: string) => call<ChatLog[]>("/admin/chats", {}, t),
   adminProducts: (t: string) => call<Product[]>("/admin/products", {}, t),
+  adminReset: (t: string) => call<{ reset: boolean }>("/admin/reset", { method: "POST" }, t),
   adminUploadCatalog: (t: string, products: Partial<Product>[]) =>
     call<{ added: number; updated: number }>("/admin/catalog", { method: "POST", body: JSON.stringify({ products }) }, t),
   adminSaveProduct: (t: string, p: Partial<Product>) =>

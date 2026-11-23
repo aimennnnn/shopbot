@@ -18,15 +18,20 @@ export default function Admin() {
   const [chats, setChats] = useState<ChatLog[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const load = useCallback(async (t: string) => {
-    setLoading(true);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [updated, setUpdated] = useState("");
+
+  const load = useCallback(async (t: string, quiet = false) => {
+    if (!quiet) setLoading(true);
     setError("");
     try {
       const [s, o, p, c] = await Promise.all([api.adminStats(t), api.adminOrders(t), api.adminProducts(t), api.adminChats(t)]);
       setStats(s); setOrders(o); setProducts(p); setChats(c);
       session.set(t);
       setToken(t);
+      setUpdated(new Date().toLocaleTimeString());
     } catch (e) {
+      if (quiet) return; // a failed background refresh keeps the last numbers on screen
       session.set("");
       setToken("");
       setError(e instanceof Error ? e.message : "Could not sign in");
@@ -36,6 +41,19 @@ export default function Admin() {
   }, []);
 
   useEffect(() => { if (token) load(token); /* eslint-disable-next-line */ }, []);
+
+  // Live dashboard: fetch fresh numbers every 10 seconds while signed in.
+  useEffect(() => {
+    if (!token) return;
+    const timer = setInterval(() => load(token, true), 10000);
+    return () => clearInterval(timer);
+  }, [token, load]);
+
+  async function resetData() {
+    await api.adminReset(token).catch(() => null);
+    setConfirmReset(false);
+    load(token);
+  }
 
   function signIn(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -66,6 +84,7 @@ export default function Admin() {
       <header className="topbar">
         <a className="brand" href="#/"><span className="brand-name">Dastkari</span><span className="brand-tag">Seller dashboard</span></a>
         <nav className="topnav">
+          <span className="live"><span className="live-dot" aria-hidden="true" />Live, updated {updated}</span>
           <button className="link" onClick={() => load(token)}>{loading ? "Refreshing…" : "Refresh"}</button>
           <a href="#/">View shop</a>
           <button className="link" onClick={() => { session.set(""); setToken(""); setStats(null); }}>Sign out</button>
@@ -115,6 +134,20 @@ export default function Admin() {
                 ))}
               </section>
             </div>
+            <section className="box reset-box">
+              <h2>Start from zero</h2>
+              <p className="muted">
+                Deletes every order, conversation, remembered fact and message count. Products stay, and stock from deleted orders is put back. This cannot be undone.
+              </p>
+              {confirmReset ? (
+                <div className="form-actions">
+                  <button className="btn btn-danger" onClick={resetData}>Yes, delete all customer activity</button>
+                  <button className="btn" onClick={() => setConfirmReset(false)}>Keep everything</button>
+                </div>
+              ) : (
+                <button className="btn" onClick={() => setConfirmReset(true)}>Clear all customer activity</button>
+              )}
+            </section>
           </>
         )}
 

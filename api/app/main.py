@@ -187,6 +187,22 @@ def admin_update_product(product_id: int, p: ProductIn) -> dict:
     return {"id": product_id}
 
 
+@app.post("/admin/reset", dependencies=[Depends(admin)])
+def admin_reset() -> dict:
+    """Clears all customer activity so the shop starts from zero: orders,
+    conversations, memory and the message log. The product catalog stays,
+    and stock taken by the deleted orders is put back."""
+    with db.pool().connection() as conn, conn.transaction():
+        conn.execute(
+            "UPDATE products p SET stock = p.stock + o.qty FROM "
+            "(SELECT product_id, sum(quantity) AS qty FROM orders WHERE status = 'confirmed' GROUP BY 1) o "
+            "WHERE p.id = o.product_id")
+        conn.execute("TRUNCATE orders, pending_actions, chat_log, user_keys, "
+                     "checkpoints, checkpoint_blobs, checkpoint_writes RESTART IDENTITY")
+        conn.execute("DELETE FROM store WHERE prefix LIKE 'memory.%%'")
+    return {"reset": True}
+
+
 class CatalogIn(BaseModel):
     products: list[ProductIn]
 
