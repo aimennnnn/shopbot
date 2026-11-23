@@ -1,0 +1,12 @@
+# Render's free plan sleeps after 15 minutes without traffic.
+# This pings the API so it stays awake for grading.
+name: keep-alive
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -fsS --max-time 90 --retry 3 "${{ vars.API_URL || 'https://shopbot-api.onrender.com' }}/health"
