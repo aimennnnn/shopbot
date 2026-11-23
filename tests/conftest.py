@@ -35,6 +35,7 @@ class FakeLLM:
 
         self.calls.append(messages)
         system, last = messages[0].content, messages[-1]
+        self.last_agent = "support" if "the support agent" in system else "sales"
         usage = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
         if isinstance(last, ToolMessage):
             return AIMessage(content=f"[after tool] {last.content}", usage_metadata=usage)
@@ -85,7 +86,7 @@ def client(llm):
     from app import graph
     from app.main import app
 
-    graph.get_llm = lambda: llm
+    graph.get_llm = lambda role="sales": llm
     c = TestClient(app)
     c.post("/admin/reset", headers=ADMIN)   # start from zero
     return c

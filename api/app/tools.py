@@ -38,8 +38,8 @@ def search_products(query: str = "", max_price: int | None = None) -> str:
         return "No matching products."
     return "\n".join(
         f"#{r['id']} {r['name']} - Rs {r['price']} - "
-        f"{'in stock: ' + str(r['stock']) if r['stock'] > 0 else 'OUT OF STOCK'} - {r['description']}"
-        for r in rows[:6]
+        f"{'in stock: ' + str(r['stock']) if r['stock'] > 0 else 'OUT OF STOCK'} - {r['description'][:90]}"
+        for r in rows[:5]
     )
 
 
@@ -170,6 +170,10 @@ def remember(fact: str, *, config: RunnableConfig) -> str:
 
 TOOLS = [search_products, search_knowledge, place_order, cancel_order, confirm_action, my_orders, remember]
 
+# Each agent only gets the tools its job needs (least privilege, and fewer tokens per call).
+SALES_TOOLS = TOOLS                                              # finds products, takes and cancels orders
+SUPPORT_TOOLS = [search_knowledge, search_products, remember]    # answers from documents; cannot touch orders
+
 
 def _namespace(user_id: str) -> tuple[str, str]:
     """Each user gets a private namespace in the store. The id is hex-encoded
@@ -183,6 +187,10 @@ def worth_saving(fact: str) -> bool:
     if len(fact) < 3 or safety.is_injection(fact):
         return False
     if re.search(r"\b(password|passcode|pin code|cvv|otp)\b", fact, re.IGNORECASE):
+        return False
+    # Memory is for personal preferences. A "fact" about prices, discounts or
+    # special status is how someone would try to talk their way into a deal later.
+    if re.search(r"\b(prices?|costs?|discounts?|free|vip|admin|owner|staff|employee|credit|balance|refund)\b", fact, re.IGNORECASE):
         return False
     return not re.search(r"\d[\d -]{11,}\d", fact)  # card or account numbers
 

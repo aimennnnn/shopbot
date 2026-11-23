@@ -27,7 +27,7 @@ import zlib
 from . import db
 
 DIM = 256
-TOP_K = 4
+TOP_K = 3
 MIN_SCORE = 0.12
 SHOP = "shop"
 

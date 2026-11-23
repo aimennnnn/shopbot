@@ -4,6 +4,7 @@ with a scripted model. They run top to bottom and build on each other
 
 Run:  TEST_DATABASE_URL=postgresql://... pytest
 """
+import re
 from concurrent.futures import ThreadPoolExecutor
 
 from conftest import ADMIN
@@ -201,6 +202,32 @@ def test_forget_me_deletes_private_notes(client, chat):
     assert "gate 4" not in chat("rg1", "t6", "kb: where should parcels be left, gate")["reply"]
 
 
+# ---------- two agents ----------
+
+def test_support_question_goes_to_the_support_agent(chat, llm):
+    chat("ma", "t", "kb: what is your return policy")
+    assert llm.last_agent == "support"
+
+
+def test_shopping_message_goes_to_the_sales_agent(chat, llm):
+    chat("ma", "t", "show me a mug")
+    assert llm.last_agent == "sales"
+
+
+def test_customer_can_ask_support_then_order_in_the_same_thread(client, chat, llm):
+    chat("mb", "t", "kb: how long does delivery take")
+    assert llm.last_agent == "support"
+    assert "NOT PLACED YET" in chat("mb", "t", "order 2 mugs")["reply"] and llm.last_agent == "sales"
+    assert "placed" in chat("mb", "t", "yes")["reply"] and llm.last_agent == "sales"
+    assert len(client.get("/orders", params={"user_id": "mb"}).json()) == 1
+
+
+def test_dashboard_shows_which_agent_answered(client):
+    stats = client.get("/admin/stats", headers=ADMIN).json()
+    assert {"sales", "support", "guard"} <= {a["agent"] for a in stats["agents"]}
+    assert {c["agent"] for c in client.get("/admin/chats", headers=ADMIN).json()} >= {"sales", "support"}
+
+
 # ---------- seller dashboard ----------
 
 def test_admin_needs_the_password(client):
@@ -228,13 +255,18 @@ def test_five_wrong_passwords_lock_that_sender_out(client):
 
 # ---------- reliability ----------
 
-def test_twenty_chats_at_once(chat):
-    """Concurrency: parallel requests from different users all succeed and stay separate."""
+def test_two_hundred_chats_forty_at_a_time(chat):
+    """Load: 200 requests from 50 different users, 40 in flight at once. Every
+    one must succeed, and no user may see another user's conversation."""
     def one(i):
-        return chat(f"load-{i}", "t", "show me a mug")
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        results = list(pool.map(one, range(20)))
-    assert all(r["tool_calls"][0]["name"] == "search_products" and "Mug" in r["reply"] for r in results)
+        user = f"load-{i % 50}"
+        return user, chat(user, "t", f"note: my lucky number is {i % 50}" if i < 50 else "what do you know")
+    with ThreadPoolExecutor(max_workers=40) as pool:
+        results = list(pool.map(one, range(200)))
+    assert len(results) == 200
+    for user, body in results:
+        seen = set(re.findall(r"lucky number is (\d+)", body["reply"]))
+        assert seen <= {user.split("-")[1]}, (user, seen)            # only ever this user's own number
 
 
 def test_rate_limit_per_sender(client):

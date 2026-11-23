@@ -1,6 +1,12 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api, ChatLog, KbDoc, Order, Product, rupees, Stats } from "./api";
 
+const AGENT_NAMES: Record<string, string> = {
+  sales: "Sales agent",
+  support: "Support agent",
+  guard: "Safety guard (no model)",
+};
+
 type View = "overview" | "orders" | "products" | "knowledge" | "chats";
 
 const session = {
@@ -137,6 +143,16 @@ export default function Admin() {
                 ))}
               </section>
             </div>
+            <section className="box agents-box">
+              <h2>Who answered</h2>
+              {(stats.agents ?? []).length === 0 && <p className="empty-note">No messages yet.</p>}
+              {(stats.agents ?? []).map((a) => (
+                <div key={a.agent} className="row">
+                  <span>{AGENT_NAMES[a.agent] ?? a.agent}</span>
+                  <span className="muted">{a.messages} {a.messages === 1 ? "message" : "messages"}, {a.avg_tokens.toLocaleString()} tokens each on average</span>
+                </div>
+              ))}
+            </section>
             <section className="box reset-box">
               <h2>Start from zero</h2>
               <p className="muted">
@@ -189,6 +205,7 @@ export default function Admin() {
                 <p><span className="who-tag">ShopBot</span> {c.reply}</p>
                 <div className="tools">
                   {c.blocked && <span className="tool tool-blocked">Blocked by safety guard</span>}
+                  {!c.blocked && c.agent && <span className="tool tool-agent">{AGENT_NAMES[c.agent] ?? c.agent}</span>}
                   {c.tool_calls.map((t, i) => <span key={i} className="tool">{t.name}</span>)}
                 </div>
               </article>

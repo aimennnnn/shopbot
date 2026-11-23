@@ -140,6 +140,7 @@ button, input, textarea { font: inherit; color: inherit; }
 .tools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .tool { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: #fff; border: 1px solid var(--turquoise); color: var(--turquoise); }
 .tool-blocked { border-color: var(--madder); color: var(--madder); }
+.tool-agent { border-color: var(--cobalt); color: var(--cobalt); }
 .empty { color: var(--muted); display: flex; flex-direction: column; gap: 8px; font-size: 15px; }
 .starter { text-align: left; background: #fff; border: 1.5px dashed var(--line); border-radius: 6px; padding: 9px 12px; cursor: pointer; color: var(--cobalt); font-weight: 500; }
 .starter:hover { border-color: var(--cobalt); }
@@ -203,6 +204,7 @@ td { padding: 10px 14px; border-top: 1px solid var(--line); }
 .kb-note { margin-bottom: 14px; max-width: 46rem; font-size: 14.5px; }
 .live { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13.5px; }
 .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--turquoise); }
+.agents-box { margin-top: 16px; }
 .reset-box { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 .btn-danger { background: var(--madder); border-color: var(--madder); color: #fff; }
 .btn-danger:hover { background: #8f1a22; }

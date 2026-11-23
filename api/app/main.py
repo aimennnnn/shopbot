@@ -32,7 +32,8 @@ def warm_up() -> None:
     def run() -> None:
         try:
             get_graph()
-            get_llm()  # loads the model client now, so the first chat is not slow
+            get_llm("sales")  # loads the model clients now, so the first chat is not slow
+            get_llm("support")
         except Exception as e:  # the app still starts; /chat will retry
             log.warning("warm-up failed: %s", e)
 
@@ -95,10 +96,10 @@ def chat(body: ChatIn, request: Request, x_user_key: str = Header(default="")) -
                 "tool_calls": [], "tokens": {"in": 0, "out": 0}, "error": type(e).__name__}
     try:
         db.execute(
-            "INSERT INTO chat_log (user_id, thread_id, message, reply, tool_calls, tokens_in, tokens_out, blocked) "
-            "VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s)",
+            "INSERT INTO chat_log (user_id, thread_id, message, reply, tool_calls, tokens_in, tokens_out, blocked, agent) "
+            "VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s)",
             (user_id, thread_id, message, out["reply"], _json(out["tool_calls"]),
-             out["tokens"]["in"], out["tokens"]["out"], out["blocked"]),
+             out["tokens"]["in"], out["tokens"]["out"], out["blocked"], out["agent"]),
         )
     except Exception:
         log.exception("could not write chat_log")
@@ -172,7 +173,10 @@ def admin_stats() -> dict:
         "SELECT created_at::date AS day, count(*) AS chats, sum(tokens_in + tokens_out) AS tokens "
         "FROM chat_log GROUP BY 1 ORDER BY 1 DESC LIMIT 7")
     low = db.query("SELECT id, name, stock FROM products WHERE active AND stock <= 5 ORDER BY stock")
-    return {**chats, **sales, "daily": daily, "low_stock": low}
+    agents = db.query(
+        "SELECT agent, count(*) AS messages, coalesce(round(avg(tokens_in + tokens_out)), 0)::int AS avg_tokens "
+        "FROM chat_log WHERE agent <> '' GROUP BY agent ORDER BY messages DESC")
+    return {**chats, **sales, "daily": daily, "low_stock": low, "agents": agents}
 
 
 @app.get("/admin/orders", dependencies=[Depends(admin)])
@@ -184,7 +188,7 @@ def admin_orders() -> list[dict]:
 @app.get("/admin/chats", dependencies=[Depends(admin)])
 def admin_chats() -> list[dict]:
     return db.query("SELECT id, user_id, thread_id, message, reply, tool_calls, tokens_in, tokens_out, "
-                    "blocked, created_at FROM chat_log ORDER BY id DESC LIMIT 100")
+                    "blocked, agent, created_at FROM chat_log ORDER BY id DESC LIMIT 100")
 
 
 @app.get("/admin/products", dependencies=[Depends(admin)])

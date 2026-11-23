@@ -26,31 +26,40 @@ flowchart LR
 
     subgraph API[Agent API: FastAPI on Render, Docker]
         direction LR
-        G[guard<br/>blocks injection<br/>0 tokens] -->|safe| R[recall<br/>loads user memory]
+        G[guard<br/>0 tokens] -->|safe| R[recall<br/>loads user memory]
         G -->|blocked| E((END))
-        R --> A[agent<br/>Claude Haiku 5.5]
-        A -->|tool call| T[tools<br/>catalog, RAG, orders]
-        T --> A
-        A -->|answer| E
+        R --> RT{router<br/>0 tokens}
+        RT -->|shopping, orders| SA[sales agent<br/>Claude Haiku 5.5<br/>7 tools]
+        RT -->|delivery, returns,<br/>payment, care| SU[support agent<br/>Claude Haiku 5.5<br/>3 tools]
+        SA <-->|tool calls| T[tools]
+        SU <-->|tool calls| T
+        SA -->|answer| E
+        SU -->|answer| E
     end
 
     T --> DB[(Neon Postgres)]
     R --> DB
-    A -.checkpoint per thread.-> DB
+    SA -.checkpoint per thread.-> DB
 ```
 
-The agent is a LangGraph `StateGraph` with four nodes that each do one job (7 tools in total):
+It is a LangGraph `StateGraph` with six nodes. Two of them are LLM agents with different jobs, prompts and tools:
 
 | Node | Role | Calls the model? |
 |---|---|---|
 | `guard` | Safety check. Refuses injection, data fishing, price tampering and clearly off-topic requests. | No |
 | `recall` | Loads this user's long-term memory from the store. | No |
-| `agent` | The sales agent. Decides what to say or which tool to call. | Yes |
-| `tools` | Runs the tools against the database. | No |
+| `router` | Picks the agent for this message with plain rules. | No |
+| `sales_agent` | Finds and recommends products, takes and cancels orders. Has all 7 tools. | Yes |
+| `support_agent` | Answers delivery, returns, payment and care questions from the shop's documents (RAG). Has 3 tools and cannot touch orders. | Yes |
+| `tools` | Runs the tool calls against the database, then hands back to the agent that asked. | No |
 
-State is `messages`, `memory` (facts loaded for this turn) and `blocked`.
+State is `messages`, `memory` (facts loaded for this turn), `blocked` and `agent` (who answers this turn).
+
+**How the two agents work together.** They share one conversation, so a customer can ask the support agent about delivery and then say "order it" and the sales agent takes over with the full history. The router sends a message to the support agent only when it is clearly a support question with no shopping or order words; everything else goes to the sales agent, which can do everything. A short follow-up like "and for Karachi?" stays with whichever agent answered last. Routing in code instead of with a supervisor model costs 0 tokens.
 
 ### Tools (all real, all hit Postgres)
+
+The sales agent has all seven. The support agent has `search_knowledge`, `search_products` and `remember`.
 
 | Tool | What it does |
 |---|---|
@@ -95,7 +104,7 @@ Every `/chat` call is traced in LangSmith (project `shopbot`): each node, each t
 | Lifetime | One conversation | All of the user's conversations |
 
 - **Short-term.** Every turn is checkpointed in Postgres, so a conversation survives a server restart. Long chats are trimmed: the model only sees the last 20 messages, which keeps cost flat.
-- **Long-term.** The agent decides what is worth saving and calls `remember` for lasting facts only, not small talk. A write gate in code then refuses anything that looks like an instruction (memory poisoning), a password or a card number. Saved facts are given to the model labelled as facts, not instructions. The `recall` node loads those facts at the start of every turn, in any thread.
+- **Long-term.** The agent decides what is worth saving and calls `remember` for lasting facts only, not small talk. A write gate in code then refuses anything that looks like an instruction (memory poisoning), a password, a card number, or a claim about prices, discounts or special status. Saved facts are given to the model labelled as facts, not instructions. The `recall` node loads those facts at the start of every turn, in any thread.
 - **Users are kept separate** in three ways:
   1. `user_id` always comes from the request, never from the model. Tools cannot be talked into using someone else's id.
   2. The checkpoint key is `[user_id, thread_id]`, so two users with the same `thread_id` still have separate conversations.
@@ -117,8 +126,9 @@ Every `/chat` call is traced in LangSmith (project `shopbot`): each node, each t
 
 ## Cost
 
-`claude-haiku-5-5` costs $0.10 per million input tokens and $0.50 per million output tokens. Cost is kept low in five ways:
+`claude-haiku-5-5` costs $0.10 per million input tokens and $0.50 per million output tokens. Cost is kept low in six ways:
 
+- Each agent is only sent the tools it needs. A support question goes to an agent with 3 tools and a shorter prompt, not 7.
 - The guard node answers attacks and off-topic requests with no model call.
 - Short system prompt and short tool descriptions.
 - Replies are capped at 300 tokens.
@@ -129,9 +139,11 @@ Token counts come from the model's own usage report, summed over every model cal
 
 ## Benchmark
 
-17 tests in [`tests.json`](tests.json): 12 of our own (including 2 for RAG) plus 5 attack tests. Run them with `python benchmark/run.py`.
+26 tests in [`tests.json`](tests.json): 12 of our own (including 2 for RAG), 5 attack tests and 9 red-team tests (obfuscated and Roman Urdu injection, memory poisoning, payload splitting, a fake tool result, an absurd quantity, a prompt leak through translation, a request for secrets, and a very long message). Run them with `python benchmark/run.py`.
 
 <!-- BENCHMARK -->
+These are the results for the first 17 tests, before the 9 red-team tests and the second agent were added. `python benchmark/run.py` re-runs all 26 and rewrites this section.
+
 Run on 23 Nov 2026 against the live API (Render free plan, `claude-haiku-5-5`).
 
 | Test | Category | What it checks | Result | Tokens in | Tokens out | Seconds |
@@ -161,9 +173,19 @@ Run on 23 Nov 2026 against the live API (Render free plan, `claude-haiku-5-5`).
 - Average cost per message that reached the model: $0.00044.
 <!-- /BENCHMARK -->
 
+### Load test
+
+`python benchmark/load_test.py` sends 50 requests, 10 at a time, each from a different user: a mix of shopping questions, support questions, attacks and off-topic messages.
+
+<!-- LOAD -->
+Not run yet against this version. Run `python benchmark/load_test.py` to fill this in.
+<!-- /LOAD -->
+
+The API allows 60 messages a minute per sender, so this test stays under that. The free Render plan has 0.1 CPU, so this measures a small server, not what the design could do on a bigger one.
+
 ## Testing
 
-`pytest` runs 78 tests. GitHub Actions runs them on every push (`.github/workflows/tests.yml`) together with the website build.
+`pytest` runs 103 tests. GitHub Actions runs them on every push (`.github/workflows/tests.yml`) together with the website build.
 
 | Kind of test | Where | What it covers |
 |---|---|---|
@@ -174,19 +196,23 @@ Run on 23 Nov 2026 against the live API (Render free plan, `claude-haiku-5-5`).
 | Memory persistence | `tests/test_agent.py` | Short-term per thread, long-term across threads, and both survive a simulated restart |
 | User isolation | `tests/test_agent.py`, `tests.json` | Orders, history, memory and private RAG chunks never cross users, even with the same `thread_id` |
 | Safety and red-team | `tests/test_unit.py`, `tests.json` | Injection, jailbreak, data fishing, price tampering, off-topic, confirmation bypass |
-| Reliability | `tests/test_agent.py` | 20 chats at once, rate limit, dashboard lockout, graceful reply when the model fails |
-| Live benchmark and cost | `benchmark/run.py` | 17 cases against the deployed API with tokens, cost and response time per case |
+| Multi-agent routing | both | The router's choices; a customer can ask support and then order in the same thread; the support agent has no order tools |
+| Reliability and load | `tests/test_agent.py` | 200 requests from 50 users, 40 at a time, with a check that no user ever sees another's data; rate limit; dashboard lockout; graceful reply when the model fails |
+| Live benchmark and cost | `benchmark/run.py` | 26 cases against the deployed API with tokens, cost and response time per case |
+| Live load test | `benchmark/load_test.py` | 50 real requests, 10 at a time, against the deployed API |
+| User acceptance test | [`docs/UAT.md`](docs/UAT.md) | 12 tasks for people who did not build it, with a results table |
 
 ```bash
 pip install -r api/requirements.txt -r requirements-dev.txt
 pytest                                   # unit tests only
 TEST_DATABASE_URL=postgresql://... pytest   # everything, on a throwaway database
 python benchmark/run.py                  # live benchmark, updates this README
+python benchmark/load_test.py            # live load test, updates this README
 ```
 
 The agent tests wipe customer activity before they start, so they only run against `TEST_DATABASE_URL`, never the real database.
 
-Not covered: a heavy load test, and automated browser tests of the website (it was checked by hand).
+Not covered: automated browser tests of the website (it was checked by hand), and load beyond what one free server and the rate limit allow. The UAT sheet is ready; its results table is filled in by the testers.
 
 ## API
 
@@ -240,10 +266,10 @@ No API keys are in this repo. `.env` is git-ignored and `.env.example` holds pla
 |---|---|
 | L2 Agent system design | One narrow task (sell from one shop), clear boundary, risk rule for spending |
 | L5 Structured outputs and contracts | Tool arguments are typed schemas; `/chat` has a fixed JSON contract |
-| L7 Tools and function calling | 7 tools with validation and least privilege: `user_id` never comes from the model |
-| L8 Orchestration with LangGraph | `StateGraph` with state, nodes, conditional edges and the agent/tools loop |
+| L7 Tools and function calling | 7 tools with validation and least privilege: `user_id` never comes from the model, and the support agent is not given the order tools |
+| L8 Orchestration with LangGraph | `StateGraph` with state, nodes, conditional edges, the agent/tools loop, and two agents that hand a conversation to each other through a router |
 | L9 RAG | Chunking, embeddings, hybrid search with RRF, agentic RAG, access control at retrieval |
-| L10 Memory | Short-term checkpointer with trimming, long-term store, write gate against memory poisoning |
+| L10 Memory | Short-term checkpointer with trimming, long-term store, write gate against memory poisoning and false facts |
 
 ## Business case
 
@@ -256,7 +282,7 @@ No API keys are in this repo. `.env` is git-ignored and `.env.example` holds pla
 
 ```
 api/         FastAPI + LangGraph agent (Dockerfile for Render)
-  app/graph.py    the graph: guard, recall, agent, tools
+  app/graph.py    the graph: guard, recall, router, sales agent, support agent, tools
   app/tools.py    the seven tools, the memory store helpers and the write gate
   app/rag.py      knowledge base: chunking, embeddings, hybrid search, privacy scopes
   app/safety.py   the guard patterns
@@ -264,7 +290,8 @@ api/         FastAPI + LangGraph agent (Dockerfile for Render)
   app/db.py       Postgres schema, pool and demo catalog
   app/main.py     /chat, /health and the website endpoints
 web/         React + Vite + TypeScript: shop page and seller dashboard
-benchmark/   runner for tests.json
+benchmark/   live benchmark (tests.json) and live load test
+docs/        demo GIF and the UAT sheet
 tests/       pytest suite: unit tests and agent tests
 tests.json   17 benchmark cases with expected behaviour
 ```

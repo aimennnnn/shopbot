@@ -14,7 +14,7 @@ export type ToolCall = { name: string; args: Record<string, unknown> };
 export type ChatReply = { reply: string; tool_calls: ToolCall[]; tokens: { in: number; out: number } };
 export type ChatLog = {
   id: number; user_id: string; thread_id: string; message: string; reply: string;
-  tool_calls: ToolCall[]; tokens_in: number; tokens_out: number; blocked: boolean; created_at: string;
+  tool_calls: ToolCall[]; tokens_in: number; tokens_out: number; blocked: boolean; agent: string; created_at: string;
 };
 export type KbDoc = { title: string; content: string; chunks: number };
 export type Stats = {
@@ -22,6 +22,7 @@ export type Stats = {
   blocked: number; with_tools: number; orders: number; revenue: number; cancelled: number;
   daily: { day: string; chats: number; tokens: number }[];
   low_stock: { id: number; name: string; stock: number }[];
+  agents: { agent: string; messages: number; avg_tokens: number }[];
 };
 
 // This browser's secret key. The API ties each website customer id to the first
