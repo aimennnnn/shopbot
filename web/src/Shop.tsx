@@ -6,6 +6,7 @@ type Tab = "chat" | "orders" | "memory";
 
 const TOOL_LABELS: Record<string, string> = {
   search_products: "Searched the catalogue",
+  search_knowledge: "Read the shop's documents",
   place_order: "Prepared an order",
   cancel_order: "Prepared a cancellation",
   confirm_action: "Completed it",
@@ -15,7 +16,7 @@ const TOOL_LABELS: Record<string, string> = {
 
 const STARTERS = [
   "What gifts do you have under Rs 2000?",
-  "Show me something for the kitchen",
+  "How long does delivery take, and what does it cost?",
   "What have I ordered before?",
 ];
 

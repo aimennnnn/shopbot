@@ -46,7 +46,7 @@ def check(step: dict, out: dict) -> list[str]:
 def main() -> None:
     tests = json.loads((ROOT / "tests.json").read_text(encoding="utf-8"))["tests"]
     urllib.request.urlopen(API + "/health", timeout=120).read()  # wake the server
-    rows, passed, tok_in, tok_out = [], 0, 0, 0
+    rows, passed, tok_in, tok_out, times, messages, to_model = [], 0, 0, 0, [], 0, 0
     for t in tests:
         fails, t_in, t_out, secs = [], 0, 0, 0.0
         for step in t["steps"]:
@@ -57,19 +57,38 @@ def main() -> None:
                 break
             fails += check(step, out)
             t_in += out["tokens"]["in"]; t_out += out["tokens"]["out"]; secs += took
+            times.append(took); messages += 1; to_model += out["tokens"]["in"] > 0
         ok = not fails
         passed += ok; tok_in += t_in; tok_out += t_out
         rows.append(f"| {t['id']} | {t['category']} | {t['name']} | {'PASS' if ok else 'FAIL'} | {t_in} | {t_out} | {secs:.1f} |")
         print(("PASS " if ok else "FAIL ") + t["id"], t["name"], "" if ok else fails)
     cost = (tok_in * PRICE_IN + tok_out * PRICE_OUT) / 1_000_000
+    times.sort()
+    median = times[len(times) // 2] if times else 0
     table = "\n".join([
         "| Test | Category | What it checks | Result | Tokens in | Tokens out | Seconds |",
         "|---|---|---|---|---|---|---|", *rows, "",
         f"**Pass rate: {passed}/{len(tests)} ({100 * passed // len(tests)}%)**. "
-        f"Total tokens: {tok_in} in, {tok_out} out. Cost of the whole run: ${cost:.4f}.",
+        f"Total tokens: {tok_in:,} in, {tok_out:,} out. Cost of the whole run: ${cost:.4f}.",
     ])
-    (ROOT / "benchmark" / "results.md").write_text(table + "\n", encoding="utf-8")
-    print("\n" + table)
+    notes = "\n".join([
+        f"- {messages} messages were sent. {messages - to_model} were answered by the guard node at 0 tokens.",
+        f"- Response time per message: median {median:.1f} s, slowest {times[-1] if times else 0:.1f} s.",
+        f"- Average cost per message that reached the model: ${cost / max(to_model, 1):.5f}.",
+    ])
+    (ROOT / "benchmark" / "results.md").write_text(table + "\n\n" + notes + "\n", encoding="utf-8")
+
+    # Put the same results into the README, between the two BENCHMARK markers.
+    readme = ROOT / "README.md"
+    text = readme.read_text(encoding="utf-8")
+    start, end = "<!-- BENCHMARK -->", "<!-- /BENCHMARK -->"
+    if start in text and end in text:
+        block = (f"{start}\nRun on {time.strftime('%d %b %Y')} against the live API "
+                 f"(Render free plan, `claude-haiku-5-5`).\n\n{table}\n\n{notes}\n{end}")
+        text = text[:text.index(start)] + block + text[text.index(end) + len(end):]
+        readme.write_text(text, encoding="utf-8")
+        print("\nREADME.md and benchmark/results.md updated.")
+    print("\n" + table + "\n\n" + notes)
 
 
 if __name__ == "__main__":

@@ -200,6 +200,7 @@ td { padding: 10px 14px; border-top: 1px solid var(--line); }
 .log-tokens { margin-left: auto; }
 .who-tag { font-weight: 700; color: var(--cobalt); margin-right: 6px; }
 
+.kb-note { margin-bottom: 14px; max-width: 46rem; font-size: 14.5px; }
 .live { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13.5px; }
 .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--turquoise); }
 .reset-box { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }

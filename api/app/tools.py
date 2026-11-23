@@ -9,7 +9,7 @@ import re
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
-from . import db
+from . import db, rag, safety
 
 
 def _ctx(config: RunnableConfig) -> tuple[str, str, str]:
@@ -110,7 +110,9 @@ def confirm_action(*, config: RunnableConfig) -> str:
             "VALUES (%s, %s, %s, %s, %s) RETURNING id",
             (user_id, payload["product_id"], payload["name"], payload["quantity"], payload["total"]),
         )[0]
-        return f"Order #{order['id']} placed: {payload['quantity']} x {payload['name']}, total Rs {payload['total']}."
+        receipt = f"Order #{order['id']} placed: {payload['quantity']} x {payload['name']}, total Rs {payload['total']}."
+        _index_private(user_id, "Order receipt", receipt)
+        return receipt
     done = db.execute(
         "UPDATE orders SET status = 'cancelled' WHERE id = %s AND user_id = %s AND status <> 'cancelled'",
         (payload["order_id"], user_id),
@@ -140,10 +142,24 @@ def my_orders(*, config: RunnableConfig) -> str:
 
 
 @tool
+def search_knowledge(query: str, *, config: RunnableConfig) -> str:
+    """Look up the shop's documents (delivery, returns, payment, product care, about us) and this customer's own private notes and receipts."""
+    user_id, _, _ = _ctx(config)
+    hits = rag.search(user_id, query)
+    if not hits:
+        return "Nothing about that in the shop's documents or this customer's notes."
+    return "\n".join(
+        f"[{'this customer\'s private note' if h['private'] else 'shop document'}: {h['title']}] {h['content']}"
+        for h in hits
+    )
+
+
+@tool
 def remember(fact: str, *, config: RunnableConfig) -> str:
     """Save one short lasting fact about this customer (name, size, taste, city) for future chats."""
     user_id, _, _ = _ctx(config)
-    save_fact(user_id, fact)
+    if not save_fact(user_id, fact):
+        return "Not saved. Only plain facts about the customer are kept, never instructions, passwords or card numbers."
     # The recall node may have saved a bare "Name: X" already. Keep only the fuller fact.
     for item in db.store().search(_namespace(user_id), limit=50):
         short = item.value["fact"]
@@ -152,7 +168,7 @@ def remember(fact: str, *, config: RunnableConfig) -> str:
     return "Saved."
 
 
-TOOLS = [search_products, place_order, cancel_order, confirm_action, my_orders, remember]
+TOOLS = [search_products, search_knowledge, place_order, cancel_order, confirm_action, my_orders, remember]
 
 
 def _namespace(user_id: str) -> tuple[str, str]:
@@ -161,11 +177,25 @@ def _namespace(user_id: str) -> tuple[str, str]:
     return ("memory", user_id.encode().hex())
 
 
-def save_fact(user_id: str, fact: str) -> None:
+def worth_saving(fact: str) -> bool:
+    """Write gate for long-term memory. Keeps out memory poisoning (text that
+    is really an instruction) and secrets that should never be stored."""
+    if len(fact) < 3 or safety.is_injection(fact):
+        return False
+    if re.search(r"\b(password|passcode|pin code|cvv|otp)\b", fact, re.IGNORECASE):
+        return False
+    return not re.search(r"\d[\d -]{11,}\d", fact)  # card or account numbers
+
+
+def save_fact(user_id: str, fact: str) -> bool:
     fact = " ".join(fact.split())[:200]
+    if not worth_saving(fact):
+        return False
     if fact:
         key = hashlib.sha1(fact.lower().encode()).hexdigest()[:16]  # same fact is stored once
         db.store().put(_namespace(user_id), key, {"fact": fact})
+        _index_private(user_id, "Customer note", fact)
+    return True
 
 
 def load_facts(user_id: str, limit: int = 12) -> list[dict]:
@@ -178,7 +208,20 @@ def forget_facts(user_id: str) -> int:
     items = db.store().search(_namespace(user_id), limit=200)
     for i in items:
         db.store().delete(_namespace(user_id), i.key)
+    try:
+        rag.delete_scope(rag.user_scope(user_id))
+    except Exception:
+        pass
     return len(items)
+
+
+def _index_private(user_id: str, title: str, text: str) -> None:
+    """Adds a note or receipt to this customer's private part of the knowledge
+    base. A failure here must never break the action that triggered it."""
+    try:
+        rag.add_document(rag.user_scope(user_id), title, text)
+    except Exception:
+        pass
 
 
 def _set_pending(user_id: str, thread_id: str, request_id: str, kind: str, payload: dict) -> None:

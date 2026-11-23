@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { api, ChatLog, Order, Product, rupees, Stats } from "./api";
+import { api, ChatLog, KbDoc, Order, Product, rupees, Stats } from "./api";
 
-type View = "overview" | "orders" | "products" | "chats";
+type View = "overview" | "orders" | "products" | "knowledge" | "chats";
 
 const session = {
   get: () => { try { return sessionStorage.getItem("shopbot_admin") ?? ""; } catch { return ""; } },
@@ -16,6 +16,7 @@ export default function Admin() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [chats, setChats] = useState<ChatLog[]>([]);
+  const [docs, setDocs] = useState<KbDoc[]>([]);
   const [loading, setLoading] = useState(false);
 
   const [confirmReset, setConfirmReset] = useState(false);
@@ -25,8 +26,10 @@ export default function Admin() {
     if (!quiet) setLoading(true);
     setError("");
     try {
-      const [s, o, p, c] = await Promise.all([api.adminStats(t), api.adminOrders(t), api.adminProducts(t), api.adminChats(t)]);
-      setStats(s); setOrders(o); setProducts(p); setChats(c);
+      const [s, o, p, c, k] = await Promise.all([
+        api.adminStats(t), api.adminOrders(t), api.adminProducts(t), api.adminChats(t), api.adminKnowledge(t),
+      ]);
+      setStats(s); setOrders(o); setProducts(p); setChats(c); setDocs(k);
       session.set(t);
       setToken(t);
       setUpdated(new Date().toLocaleTimeString());
@@ -93,9 +96,9 @@ export default function Admin() {
 
       <main className="admin">
         <div className="tabs admin-tabs" role="tablist">
-          {(["overview", "orders", "products", "chats"] as View[]).map((v) => (
+          {(["overview", "orders", "products", "knowledge", "chats"] as View[]).map((v) => (
             <button key={v} role="tab" aria-selected={view === v} className={"tab" + (view === v ? " tab-on" : "")} onClick={() => setView(v)}>
-              {v === "overview" ? "Overview" : v === "orders" ? `Orders (${orders.length})` : v === "products" ? `Products (${products.length})` : "Conversations"}
+              {v === "overview" ? "Overview" : v === "orders" ? `Orders (${orders.length})` : v === "products" ? `Products (${products.length})` : v === "knowledge" ? `Knowledge (${docs.length})` : "Conversations"}
             </button>
           ))}
         </div>
@@ -170,6 +173,8 @@ export default function Admin() {
         )}
 
         {view === "products" && <Products token={token} products={products} onSaved={() => load(token)} />}
+
+        {view === "knowledge" && <Knowledge token={token} docs={docs} onSaved={() => load(token, true)} />}
 
         {view === "chats" && (
           <div className="chatlog">
@@ -326,6 +331,67 @@ function Products({ token, products, onSaved }: { token: string; products: Produ
             ))}
           </tbody>
         </table>
+      </div>
+    </>
+  );
+}
+
+// The shop's documents that ShopBot searches before answering (RAG).
+function Knowledge({ token, docs, onSaved }: { token: string; docs: KbDoc[]; onSaved: () => void }) {
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      await api.adminSaveDocument(token, title, content);
+      setTitle("");
+      setContent("");
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save the document");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove(t: string) {
+    await api.adminDeleteDocument(token, t).catch(() => null);
+    onSaved();
+  }
+
+  return (
+    <>
+      <p className="muted kb-note">
+        ShopBot searches these documents before it answers questions about delivery, returns, payment and care.
+        Customers' private notes and receipts are stored separately and are never shown here.
+      </p>
+      <form className="box product-form" onSubmit={save}>
+        <h2>Add or replace a document</h2>
+        <label>Title<input required value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Eid sale" maxLength={120} /></label>
+        <label>Text<textarea required rows={4} value={content} onChange={(e) => setContent(e.target.value)}
+          placeholder="Write it in plain sentences. Saving with an existing title replaces that document." /></label>
+        {error && <p className="error" role="alert">{error}</p>}
+        <div className="form-actions">
+          <button className="btn btn-primary" type="submit" disabled={saving}>{saving ? "Saving…" : "Save document"}</button>
+        </div>
+      </form>
+      <div className="chatlog">
+        {docs.map((d) => (
+          <article key={d.title} className="log">
+            <header>
+              <b>{d.title}</b>
+              <span className="muted">{d.chunks} {d.chunks === 1 ? "chunk" : "chunks"}</span>
+              <button className="link log-tokens" onClick={() => remove(d.title)}>Delete</button>
+            </header>
+            <p>{d.content}</p>
+          </article>
+        ))}
+        {docs.length === 0 && <p className="empty-note">No documents yet. Add one so ShopBot can answer shop questions.</p>}
       </div>
     </>
   );

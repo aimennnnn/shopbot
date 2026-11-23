@@ -51,6 +51,17 @@ CREATE TABLE IF NOT EXISTS user_keys (
     key_hash TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- RAG knowledge base. scope is 'shop' (public) or 'user:<id>' (one customer's private chunks).
+CREATE TABLE IF NOT EXISTS kb_chunks (
+    id SERIAL PRIMARY KEY,
+    scope TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    embedding JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (scope, content)
+);
+CREATE INDEX IF NOT EXISTS kb_chunks_scope_idx ON kb_chunks (scope);
 -- One row per /chat call, for the admin dashboard and cost tracking.
 CREATE TABLE IF NOT EXISTS chat_log (
     id SERIAL PRIMARY KEY,
@@ -126,6 +137,11 @@ def init() -> None:
         store.setup()
         _store = store
         _ready = True
+    try:  # demo documents for the knowledge base; never stops the shop from starting
+        from . import rag
+        rag.seed()
+    except Exception:
+        pass
 
 
 def store() -> PostgresStore:

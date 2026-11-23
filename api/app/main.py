@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict
 
-from . import config, db, security
+from . import config, db, rag, security
 from .graph import get_graph, get_llm, run_turn
 from .tools import forget_facts, load_facts
 
@@ -217,6 +217,7 @@ def admin_reset() -> dict:
     """Clears all customer activity so the shop starts from zero: orders,
     conversations, memory and the message log. The product catalog stays,
     and stock taken by the deleted orders is put back."""
+    get_graph()  # makes sure the conversation tables exist, even on a brand new database
     with db.pool().connection() as conn, conn.transaction():
         conn.execute(
             "UPDATE products p SET stock = p.stock + o.qty FROM "
@@ -225,7 +226,35 @@ def admin_reset() -> dict:
         conn.execute("TRUNCATE orders, pending_actions, chat_log, user_keys, "
                      "checkpoints, checkpoint_blobs, checkpoint_writes RESTART IDENTITY")
         conn.execute("DELETE FROM store WHERE prefix LIKE 'memory.%%'")
+        conn.execute("DELETE FROM kb_chunks WHERE scope LIKE 'user:%%'")  # private notes; shop documents stay
     return {"reset": True}
+
+
+class DocumentIn(BaseModel):
+    title: str
+    content: str
+
+
+@app.get("/admin/knowledge", dependencies=[Depends(admin)])
+def admin_knowledge() -> list[dict]:
+    """The shop's own documents in the knowledge base (never customers' private chunks)."""
+    return db.query(
+        "SELECT title, string_agg(content, ' ' ORDER BY id) AS content, count(*) AS chunks "
+        "FROM kb_chunks WHERE scope = %s GROUP BY title ORDER BY min(id)", (rag.SHOP,))
+
+
+@app.post("/admin/knowledge", dependencies=[Depends(admin)])
+def admin_add_document(doc: DocumentIn) -> dict:
+    title = doc.title.strip()[:120]
+    if not title or not doc.content.strip():
+        raise HTTPException(status_code=400, detail="A document needs a title and some text")
+    rag.delete_document(rag.SHOP, title)  # saving again with the same title replaces it
+    return {"chunks": rag.add_document(rag.SHOP, title, doc.content[:20000])}
+
+
+@app.delete("/admin/knowledge", dependencies=[Depends(admin)])
+def admin_delete_document(title: str) -> dict:
+    return {"deleted": rag.delete_document(rag.SHOP, title)}
 
 
 class CatalogIn(BaseModel):

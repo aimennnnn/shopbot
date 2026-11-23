@@ -16,6 +16,7 @@ export type ChatLog = {
   id: number; user_id: string; thread_id: string; message: string; reply: string;
   tool_calls: ToolCall[]; tokens_in: number; tokens_out: number; blocked: boolean; created_at: string;
 };
+export type KbDoc = { title: string; content: string; chunks: number };
 export type Stats = {
   chats: number; users: number; conversations: number; tokens_in: number; tokens_out: number;
   blocked: number; with_tools: number; orders: number; revenue: number; cancelled: number;
@@ -62,6 +63,11 @@ export const api = {
   adminOrders: (t: string) => call<Order[]>("/admin/orders", {}, t),
   adminChats: (t: string) => call<ChatLog[]>("/admin/chats", {}, t),
   adminProducts: (t: string) => call<Product[]>("/admin/products", {}, t),
+  adminKnowledge: (t: string) => call<KbDoc[]>("/admin/knowledge", {}, t),
+  adminSaveDocument: (t: string, title: string, content: string) =>
+    call<{ chunks: number }>("/admin/knowledge", { method: "POST", body: JSON.stringify({ title, content }) }, t),
+  adminDeleteDocument: (t: string, title: string) =>
+    call<{ deleted: number }>("/admin/knowledge?title=" + encodeURIComponent(title), { method: "DELETE" }, t),
   adminReset: (t: string) => call<{ reset: boolean }>("/admin/reset", { method: "POST" }, t),
   adminUploadCatalog: (t: string, products: Partial<Product>[]) =>
     call<{ added: number; updated: number }>("/admin/catalog", { method: "POST", body: JSON.stringify({ products }) }, t),

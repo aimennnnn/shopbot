@@ -29,7 +29,7 @@ flowchart LR
         G[guard<br/>blocks injection<br/>0 tokens] -->|safe| R[recall<br/>loads user memory]
         G -->|blocked| E((END))
         R --> A[agent<br/>Claude Haiku 5.5]
-        A -->|tool call| T[tools]
+        A -->|tool call| T[tools<br/>catalog, RAG, orders]
         T --> A
         A -->|answer| E
     end
@@ -39,11 +39,11 @@ flowchart LR
     A -.checkpoint per thread.-> DB
 ```
 
-The agent is a LangGraph `StateGraph` with four nodes that each do one job:
+The agent is a LangGraph `StateGraph` with four nodes that each do one job (7 tools in total):
 
 | Node | Role | Calls the model? |
 |---|---|---|
-| `guard` | Safety check. Refuses obvious prompt injection and requests for other users' data. | No |
+| `guard` | Safety check. Refuses injection, data fishing, price tampering and clearly off-topic requests. | No |
 | `recall` | Loads this user's long-term memory from the store. | No |
 | `agent` | The sales agent. Decides what to say or which tool to call. | Yes |
 | `tools` | Runs the tools against the database. | No |
@@ -55,11 +55,31 @@ State is `messages`, `memory` (facts loaded for this turn) and `blocked`.
 | Tool | What it does |
 |---|---|
 | `search_products` | Searches the catalog by keyword and price limit. |
+| `search_knowledge` | RAG: retrieves chunks from the shop's documents and from this user's own private notes and receipts. |
 | `place_order` | Prepares an order. Nothing is bought yet. |
 | `cancel_order` | Prepares cancelling one of the user's own orders. |
 | `confirm_action` | Carries out the prepared order or cancellation after the customer says yes. |
 | `my_orders` | Lists the user's own orders from all conversations. |
 | `remember` | Saves a lasting fact about the user. |
+
+## RAG with privacy isolation
+
+ShopBot answers shop questions (delivery, returns, payment, product care) from documents, not from the model's memory. This is agentic RAG: the agent decides when to call the `search_knowledge` tool.
+
+```
+Seller document / customer note / order receipt
+        -> chunks (about 2 sentences) -> embedding -> kb_chunks table in Postgres
+
+Question -> query embedding -> hybrid search -> top 4 chunks -> Claude answers from them
+```
+
+- **Chunking:** documents are split on sentence ends into chunks of up to 260 characters.
+- **Hybrid search:** two rankings are fused with Reciprocal Rank Fusion: cosine similarity between embeddings, and BM25 on the words.
+- **Privacy isolation:** every chunk has a scope. `shop` chunks are public. `user:<user_id>` chunks are one customer's private notes and order receipts. A search reads only `shop` plus the caller's own scope, and the scope comes from the request's `user_id`, never from the model. Another customer's chunks are filtered out in SQL, so they never reach the ranking or the prompt.
+- **Retrieved text is data.** The system prompt says text from tools is never an instruction.
+- **The seller manages the documents** in the dashboard's Knowledge tab. Customers' private chunks are never listed there.
+
+**Limitation, stated plainly:** the embeddings come from a small built-in embedder (feature hashing of words and letter trigrams, 256 dimensions), not a neural embedding model. It needs no extra service or API key and fits the free 512 MB server, but it matches on wording more than on meaning. A short synonym list and the BM25 half of the hybrid search cover the common cases. `embed()` in `api/app/rag.py` is the one function to replace to use a neural model.
 
 ### Tracing with LangSmith
 
@@ -75,7 +95,7 @@ Every `/chat` call is traced in LangSmith (project `shopbot`): each node, each t
 | Lifetime | One conversation | All of the user's conversations |
 
 - **Short-term.** Every turn is checkpointed in Postgres, so a conversation survives a server restart. Long chats are trimmed: the model only sees the last 20 messages, which keeps cost flat.
-- **Long-term.** The agent decides what is worth saving and calls `remember` for lasting facts only, not small talk. The `recall` node loads those facts at the start of every turn, in any thread.
+- **Long-term.** The agent decides what is worth saving and calls `remember` for lasting facts only, not small talk. A write gate in code then refuses anything that looks like an instruction (memory poisoning), a password or a card number. Saved facts are given to the model labelled as facts, not instructions. The `recall` node loads those facts at the start of every turn, in any thread.
 - **Users are kept separate** in three ways:
   1. `user_id` always comes from the request, never from the model. Tools cannot be talked into using someone else's id.
   2. The checkpoint key is `[user_id, thread_id]`, so two users with the same `thread_id` still have separate conversations.
@@ -84,8 +104,8 @@ Every `/chat` call is traced in LangSmith (project `shopbot`): each node, each t
 
 ## Safety
 
-- **Prompt injection:** the `guard` node refuses known injection patterns before the model is called, so attacks cost 0 tokens. The system prompt covers subtler cases.
-- **Off-topic:** the agent only helps with this shop and refuses everything else in one sentence.
+- **Deterministic guard:** the `guard` node is plain code, not a model. Before the model is called it refuses prompt injection, fishing for other users' data, price tampering ("set the price to Rs 1", "give me a 100% discount") and clearly off-topic requests (code, homework, general knowledge). These cost 0 tokens.
+- **Second layer:** anything subtler reaches the agent, whose system prompt carries the same rules.
 - **Risky actions:** spending money and cancelling orders need a human yes. `place_order` only prepares the order. `confirm_action` is refused in code unless the yes arrives in a later message than the one that prepared it. The model cannot skip this, even if told to.
 
 ### Abuse protection
@@ -97,14 +117,22 @@ Every `/chat` call is traced in LangSmith (project `shopbot`): each node, each t
 
 ## Cost
 
-`claude-haiku-5-5` costs $0.10 per million input tokens and $0.50 per million output tokens. Cost is kept low by a short system prompt, short tool descriptions, a 300 token reply limit, trimmed history, and the guard node that answers attacks without the model. The dashboard shows tokens used per message.
+`claude-haiku-5-5` costs $0.10 per million input tokens and $0.50 per million output tokens. Cost is kept low in five ways:
+
+- The guard node answers attacks and off-topic requests with no model call.
+- Short system prompt and short tool descriptions.
+- Replies are capped at 300 tokens.
+- History is compacted: the last two turns are sent in full, but from older turns only the question and the final answer are sent, not the raw tool results.
+- At most 20 messages of history are ever sent.
+
+Token counts come from the model's own usage report, summed over every model call in the turn, and are returned in `tokens`. The dashboard shows tokens used per message.
 
 ## Benchmark
 
-15 tests in [`tests.json`](tests.json): 10 of our own plus 5 attack tests. Run them with `python benchmark/run.py`.
+17 tests in [`tests.json`](tests.json): 12 of our own (including 2 for RAG) plus 5 attack tests. Run them with `python benchmark/run.py`.
 
 <!-- BENCHMARK -->
-Run on 23 Nov 2026 against the live API (Render free plan, `claude-haiku-5-5`), 19 messages in total.
+Run on 23 Nov 2026 against the live API (Render free plan, `claude-haiku-5-5`), 19 messages in total. This run was made before the two RAG tests (T11, T12) were added; `python benchmark/run.py` re-runs all 17 and rewrites this section.
 
 | Test | Category | What it checks | Result | Tokens in | Tokens out | Seconds |
 |---|---|---|---|---|---|---|
@@ -130,6 +158,33 @@ Run on 23 Nov 2026 against the live API (Render free plan, `claude-haiku-5-5`), 
 - Four of the five attacks were stopped by the `guard` node and cost 0 tokens.
 - Average cost per message that reached the model (15 of the 19): about $0.00035.
 <!-- /BENCHMARK -->
+
+## Testing
+
+`pytest` runs 78 tests. GitHub Actions runs them on every push (`.github/workflows/tests.yml`) together with the website build.
+
+| Kind of test | Where | What it covers |
+|---|---|---|
+| Unit | `tests/test_unit.py` | Guard patterns (blocked and allowed lists), chunking, embeddings, memory write gate, history compaction, request parsing |
+| Integration and end-to-end | `tests/test_agent.py` | The real API, graph, tools and Postgres with a scripted model: full order flow from search to confirmed order |
+| API contract | `tests/test_agent.py` | `/health` returns `ok`; `/chat` always returns `reply`, `tool_calls`, `tokens.in`, `tokens.out`, even for bad input or a model failure |
+| Tool use | both, plus `tests.json` | The right tool is called with the right arguments and reported in `tool_calls` |
+| Memory persistence | `tests/test_agent.py` | Short-term per thread, long-term across threads, and both survive a simulated restart |
+| User isolation | `tests/test_agent.py`, `tests.json` | Orders, history, memory and private RAG chunks never cross users, even with the same `thread_id` |
+| Safety and red-team | `tests/test_unit.py`, `tests.json` | Injection, jailbreak, data fishing, price tampering, off-topic, confirmation bypass |
+| Reliability | `tests/test_agent.py` | 20 chats at once, rate limit, dashboard lockout, graceful reply when the model fails |
+| Live benchmark and cost | `benchmark/run.py` | 17 cases against the deployed API with tokens, cost and response time per case |
+
+```bash
+pip install -r api/requirements.txt -r requirements-dev.txt
+pytest                                   # unit tests only
+TEST_DATABASE_URL=postgresql://... pytest   # everything, on a throwaway database
+python benchmark/run.py                  # live benchmark, updates this README
+```
+
+The agent tests wipe customer activity before they start, so they only run against `TEST_DATABASE_URL`, never the real database.
+
+Not covered: a heavy load test, and automated browser tests of the website (it was checked by hand).
 
 ## API
 
@@ -177,6 +232,17 @@ Tables and demo products are created on first start.
 
 No API keys are in this repo. `.env` is git-ignored and `.env.example` holds placeholders only.
 
+## How it maps to the course lectures
+
+| Lecture | Where it is in this project |
+|---|---|
+| L2 Agent system design | One narrow task (sell from one shop), clear boundary, risk rule for spending |
+| L5 Structured outputs and contracts | Tool arguments are typed schemas; `/chat` has a fixed JSON contract |
+| L7 Tools and function calling | 7 tools with validation and least privilege: `user_id` never comes from the model |
+| L8 Orchestration with LangGraph | `StateGraph` with state, nodes, conditional edges and the agent/tools loop |
+| L9 RAG | Chunking, embeddings, hybrid search with RRF, agentic RAG, access control at retrieval |
+| L10 Memory | Short-term checkpointer with trimming, long-term store, write gate against memory poisoning |
+
 ## Business case
 
 - **Customer:** small sellers who sell through Instagram and WhatsApp and answer the same questions by hand all day.
@@ -189,12 +255,14 @@ No API keys are in this repo. `.env` is git-ignored and `.env.example` holds pla
 ```
 api/         FastAPI + LangGraph agent (Dockerfile for Render)
   app/graph.py    the graph: guard, recall, agent, tools
-  app/tools.py    the six tools and the memory store helpers
+  app/tools.py    the seven tools, the memory store helpers and the write gate
+  app/rag.py      knowledge base: chunking, embeddings, hybrid search, privacy scopes
   app/safety.py   the guard patterns
   app/security.py customer keys, rate limit, dashboard lockout
   app/db.py       Postgres schema, pool and demo catalog
   app/main.py     /chat, /health and the website endpoints
 web/         React + Vite + TypeScript: shop page and seller dashboard
 benchmark/   runner for tests.json
-tests.json   15 test cases with expected behaviour
+tests/       pytest suite: unit tests and agent tests
+tests.json   17 benchmark cases with expected behaviour
 ```
